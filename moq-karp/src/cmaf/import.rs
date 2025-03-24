@@ -1,13 +1,12 @@
-use bytes::{Bytes, BytesMut};
-use mp4_atom::{Any, AsyncReadFrom, Atom, DecodeMaybe, Esds, Mdat, Moof, Moov, Tfdt, Trak, Trun};
-use std::{collections::HashMap, time::Duration};
-use tokio::io::{AsyncRead, AsyncReadExt};
-
 use super::{Error, Result};
 use crate::{
 	Audio, BroadcastProducer, Dimensions, Frame, Timestamp, Track, TrackProducer, Video, VideoCodec, AAC, AV1, H264,
 	H265, VP9,
 };
+use bytes::{Bytes, BytesMut};
+use mp4_atom::{Any, AsyncReadFrom, Atom, DecodeMaybe, Esds, Mdat, Moof, Moov, Tfdt, Trak, Trun};
+use std::{collections::HashMap, time::Duration};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Converts fMP4 -> Karp
 pub struct Import {
@@ -86,17 +85,18 @@ impl Import {
 			let track = match handler.as_ref() {
 				b"vide" => {
 					let track = Self::init_video(trak)?;
-					self.broadcast.publish_video(track)?
+					self.broadcast.publish_video(track)
 				}
 				b"soun" => {
 					let track = Self::init_audio(trak)?;
-					self.broadcast.publish_audio(track)?
+					self.broadcast.publish_audio(track)
 				}
 				b"sbtl" => return Err(Error::UnsupportedTrack("subtitle")),
 				_ => return Err(Error::UnsupportedTrack("unknown")),
 			};
 
-			self.tracks.insert(track_id, track);
+			self.tracks
+				.insert(track_id, track.expect("Error while publishing track"));
 		}
 
 		self.moov = Some(moov);
@@ -139,8 +139,8 @@ impl Import {
 					bitrate: None,
 				}
 			}
-			mp4_atom::Codec::Hev1(hev1) => Self::init_h265(track, &hev1.hvcc, &hev1.visual)?,
-			mp4_atom::Codec::Hvc1(hvc1) => Self::init_h265(track, &hvc1.hvcc, &hvc1.visual)?,
+			mp4_atom::Codec::Hev1(hev1) => Self::init_h265(track, true, &hev1.hvcc, &hev1.visual)?,
+			mp4_atom::Codec::Hvc1(hvc1) => Self::init_h265(track, false, &hvc1.hvcc, &hvc1.visual)?,
 			mp4_atom::Codec::Vp08(vp08) => Video {
 				track,
 				codec: VideoCodec::VP8,
@@ -215,13 +215,14 @@ impl Import {
 	}
 
 	// There's two almost identical hvcc atoms in the wild.
-	fn init_h265(track: Track, hvcc: &mp4_atom::Hvcc, visual: &mp4_atom::Visual) -> Result<Video> {
+	fn init_h265(track: Track, in_band: bool, hvcc: &mp4_atom::Hvcc, visual: &mp4_atom::Visual) -> Result<Video> {
 		let mut description = BytesMut::new();
 		hvcc.encode_body(&mut description)?;
 
 		Ok(Video {
 			track,
 			codec: H265 {
+				in_band,
 				profile_space: hvcc.general_profile_space,
 				profile_idc: hvcc.general_profile_idc,
 				profile_compatibility_flags: hvcc.general_profile_compatibility_flags,
